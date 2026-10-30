@@ -1,9 +1,22 @@
-name: Publish
+name: Build and release
+
+# This fork's CI. In the public fork (koyuuji/steamworks.js) every push to main builds all four
+# targets, and a v* tag also packs them and attaches the tarball to a GitHub Release, which is how
+# the package is consumed — it is not published to npm. In the private source repo only a manual
+# run does anything: a Linux and Windows build, for test binaries, without spending macOS minutes.
+#
+# Nothing runs on pull_request: in a public repo that would build a stranger's code. Every action is
+# pinned to a commit, cargo-xwin to a version, and `npm ci --ignore-scripts` keeps devDependencies'
+# install scripts (Electron's download) from running. No build cache, so a release is built clean.
 
 on:
     push:
         branches: [main]
-    pull_request:
+        tags: ['v*']
+    workflow_dispatch:
+
+permissions:
+    contents: read
 
 env:
     DEBUG: 'napi:*'
@@ -11,34 +24,52 @@ env:
 
 jobs:
     check:
+        if: >-
+            (github.repository == 'koyuuji/steamworks.js' && github.event_name == 'push') ||
+            (github.repository == 'koyuuji/steamworks.js-src' && github.event_name == 'workflow_dispatch')
         runs-on: ubuntu-latest
 
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
 
             - name: Setup Rust
-              uses: dtolnay/rust-toolchain@stable
+              uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
               with:
                   toolchain: stable
+                  components: rustfmt, clippy
+
+            - name: Lockfile is current
+              run: cargo fetch --locked
 
             - name: Check formatting
               run: cargo fmt --all --check
 
             - name: Clippy
-              run: cargo clippy
+              run: cargo clippy --locked
 
     build:
+        if: >-
+            (github.repository == 'koyuuji/steamworks.js' && github.event_name == 'push') ||
+            (github.repository == 'koyuuji/steamworks.js-src' && github.event_name == 'workflow_dispatch')
         runs-on: ubuntu-latest
 
-        # Run in ubuntu:20.04 container to avoid the issue with glibc version
+        # Built in ubuntu:20.04 so the Linux binary needs only glibc 2.31, which the Steam Linux
+        # Runtime (sniper, Debian 11) has. A build on a current image would need a newer one.
         container:
             image: ubuntu:20.04
 
+        env:
+            DEBIAN_FRONTEND: noninteractive
+
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
 
             - name: Setup Node
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: 22.x
 
@@ -46,17 +77,18 @@ jobs:
             - run: apt-get update && apt-get install -y curl build-essential
 
             - name: Setup Rust
-              uses: dtolnay/rust-toolchain@stable
+              uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
               with:
                   toolchain: stable
                   targets: x86_64-pc-windows-msvc, x86_64-unknown-linux-gnu
 
-            - uses: Swatinem/rust-cache@v2
+            - run: cargo install cargo-xwin --version 0.23.1 --locked
 
-            - run: cargo install cargo-xwin
+            - name: Lockfile is current
+              run: cargo fetch --locked
 
             - name: Node install
-              run: npm ci
+              run: npm ci --ignore-scripts
 
             - name: Build Linux
               run: npm run build -- --target x86_64-unknown-linux-gnu
@@ -65,33 +97,37 @@ jobs:
               run: npm run build -- --target x86_64-pc-windows-msvc
 
             - name: Upload artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
               with:
                   name: binaries-windows-linux
                   path: dist
                   if-no-files-found: error
 
     build-mac:
+        if: github.repository == 'koyuuji/steamworks.js' && github.event_name == 'push'
         runs-on: macos-latest
 
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
 
             - name: Setup Node
-              uses: actions/setup-node@v4
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: 22.x
 
             - name: Setup Rust
-              uses: dtolnay/rust-toolchain@stable
+              uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-16
               with:
                   toolchain: stable
                   targets: x86_64-apple-darwin, aarch64-apple-darwin
 
-            - uses: Swatinem/rust-cache@v2
+            - name: Lockfile is current
+              run: cargo fetch --locked
 
             - name: Node install
-              run: npm ci
+              run: npm ci --ignore-scripts
 
             - name: Build Mac x64
               run: npm run build -- --target x86_64-apple-darwin
@@ -100,35 +136,70 @@ jobs:
               run: npm run build -- --target aarch64-apple-darwin
 
             - name: Upload artifact
-              uses: actions/upload-artifact@v4
+              uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
               with:
                   name: binaries-macos
                   path: dist
                   if-no-files-found: error
 
-    deploy:
-        # prevents this action from running on forks or pull requests
-        if: ${{ github.repository == 'ceifa/steamworks.js' && github.event_name == 'push' }}
-
+    release:
+        if: github.repository == 'koyuuji/steamworks.js' && startsWith(github.ref, 'refs/tags/v')
+        needs: [check, build, build-mac]
         runs-on: ubuntu-latest
-        needs: [build, build-mac]
+
+        # The one job that writes. GITHUB_TOKEN, so the release is credited to github-actions[bot].
+        permissions:
+            contents: write
 
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
 
             - name: Download build
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
               with:
                   path: dist/
                   pattern: binaries-*
                   merge-multiple: true
 
-            - name: Log files
-              run: |
-                  echo "- Root directory:" && ls
-                  echo "- Dist directory:" && ls -R dist
-
-            - name: Publish to npm
-              uses: JS-DevTools/npm-publish@v1
+            - name: Setup Node
+              uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
-                  token: ${{ secrets.NPM_TOKEN }}
+                  node-version: 22.x
+
+            - name: Tag matches package.json
+              run: |
+                  version=$(node -p "require('./package.json').version")
+                  if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+                      echo "Tag $GITHUB_REF_NAME does not match package.json version $version"
+                      exit 1
+                  fi
+
+            - name: Every target is present
+              run: |
+                  ls -R dist
+                  for f in \
+                      dist/win64/steamworksjs.win32-x64-msvc.node dist/win64/steam_api64.dll \
+                      dist/linux64/steamworksjs.linux-x64-gnu.node dist/linux64/libsteam_api.so \
+                      dist/osx/steamworksjs.darwin-x64.node dist/osx/steamworksjs.darwin-arm64.node \
+                      dist/osx/libsteam_api.dylib
+                  do
+                      test -f "$f" || { echo "Missing $f"; exit 1; }
+                  done
+
+            - name: Pack
+              run: npm pack --ignore-scripts
+
+            - name: Checksum
+              run: sha256sum steamworks.js-*.tgz > SHA256SUMS && cat SHA256SUMS
+
+            - name: Release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+              run: >-
+                  gh release create "$GITHUB_REF_NAME" steamworks.js-*.tgz SHA256SUMS
+                  --verify-tag
+                  --title "$GITHUB_REF_NAME"
+                  --notes "Built from ${GITHUB_SHA} by this repository's workflow. Install by the tarball's URL; not published to npm."
