@@ -1,3 +1,8 @@
+> **This is Koyuuji's fork of [ceifa/steamworks.js](https://github.com/ceifa/steamworks.js)**, kept for
+> our own games. It adds what they need on top of upstream's `main`. Builds are attached to this
+> repository's [releases](https://github.com/koyuuji/steamworks.js/releases) as tarballs and installed by URL; nothing is published to npm.
+> Issues and pull requests are not monitored. Everything below is upstream's README.
+
 [![Build Status](https://github.com/ceifa/steamworks.js/actions/workflows/publish.yml/badge.svg)](https://github.com/ceifa/steamworks.js/actions/workflows/publish.yml)
 [![npm](https://img.shields.io/npm/v/steamworks.js.svg)](https://npmjs.com/package/steamworks.js)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
