@@ -1,0 +1,47 @@
+name: Mirror
+
+# Pushes main and v* tags from this private repo to the public fork as the org's release App, so
+# the public fork's history, activity and workflow runs name the App and nobody else. The App is
+# installed on the public fork only, and that fork's rulesets let nothing else push.
+#
+# Never forced. A rejected push means the public fork has history this repo does not, and that
+# needs a person to look at it, not an overwrite.
+
+on:
+    push:
+        branches: [main]
+        tags: ['v*']
+
+permissions:
+    contents: read
+
+concurrency:
+    group: mirror
+    cancel-in-progress: false
+
+jobs:
+    mirror:
+        if: github.repository == 'koyuuji/steamworks.js-src'
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Token for the public fork
+              id: app
+              uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+              with:
+                  client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+                  private-key: ${{ secrets.RELEASE_APP_KEY }}
+                  owner: koyuuji
+                  repositories: steamworks.js
+                  permission-contents: write
+                  permission-workflows: write
+
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - name: Push
+              env:
+                  TOKEN: ${{ steps.app.outputs.token }}
+              run: git push "https://x-access-token:${TOKEN}@github.com/koyuuji/steamworks.js.git" "${GITHUB_REF}:${GITHUB_REF}"
