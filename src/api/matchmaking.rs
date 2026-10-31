@@ -17,6 +17,62 @@ pub mod matchmaking {
     }
 
     #[napi]
+    pub enum LobbyComparison {
+        Equal,
+        NotEqual,
+        GreaterThan,
+        GreaterThanEqualTo,
+        LessThan,
+        LessThanEqualTo,
+    }
+
+    #[napi]
+    pub enum LobbyDistance {
+        Close,
+        /// The searcher's own region and nearby ones. Steam's default.
+        Default,
+        /// About half-way around the globe.
+        Far,
+        Worldwide,
+    }
+
+    /// Lobby data `key` must equal `value`, or with `exclude` must not.
+    #[napi(object)]
+    pub struct LobbyStringFilter {
+        pub key: String,
+        pub value: String,
+        pub exclude: Option<bool>,
+    }
+
+    /// Lobby data `key`, read as a number, compared with `value`. `Equal` when no comparison is given.
+    #[napi(object)]
+    pub struct LobbyNumberFilter {
+        pub key: String,
+        pub value: i32,
+        pub comparison: Option<LobbyComparison>,
+    }
+
+    /// Sorts results by how close lobby data `key` is to `value`. Excludes nothing.
+    #[napi(object)]
+    pub struct LobbyNearFilter {
+        pub key: String,
+        pub value: i32,
+    }
+
+    /// What `getLobbies` asks Steam for. Every field is optional.
+    #[napi(object)]
+    pub struct LobbyListFilter {
+        pub strings: Option<Vec<LobbyStringFilter>>,
+        pub numbers: Option<Vec<LobbyNumberFilter>>,
+        pub near: Option<Vec<LobbyNearFilter>>,
+        /// Only lobbies with at least this many free places.
+        pub open_slots: Option<u32>,
+        pub distance: Option<LobbyDistance>,
+        /// At most this many lobbies.
+        pub count: Option<u32>,
+    }
+
+    #[napi]
     pub struct Lobby {
         pub id: BigInt,
         lobby_id: LobbyId,
@@ -181,9 +237,16 @@ pub mod matchmaking {
             .map_err(|_| Error::from_reason("Failed to join lobby".to_string()))
     }
 
+    /// Search for lobbies, filtered or not. Steam runs one search at a time and a new one cancels the
+    /// last. Without a `distance` filter it returns only the searcher's region and nearby ones.
     #[napi]
-    pub async fn get_lobbies() -> Result<Vec<Lobby>, Error> {
+    pub async fn get_lobbies(filter: Option<LobbyListFilter>) -> Result<Vec<Lobby>, Error> {
         let client = crate::client::get_client();
+
+        // Steam holds filters until the next request and then clears them, so they go on just before it.
+        if let Some(filter) = &filter {
+            apply_filter(&client, filter)?;
+        }
 
         let (tx, rx) = oneshot::channel();
 
@@ -203,5 +266,98 @@ pub mod matchmaking {
                     .collect()
             })
             .map_err(|e| Error::from_reason(e.to_string()))
+    }
+
+    fn key(key: &str) -> Result<steamworks::LobbyKey<'_>, Error> {
+        steamworks::LobbyKey::try_new(key)
+            .map_err(|e| Error::from_reason(format!("{}: {}", e, key)))
+    }
+
+    fn apply_filter(client: &steamworks::Client, filter: &LobbyListFilter) -> Result<(), Error> {
+        let strings = filter
+            .strings
+            .as_ref()
+            .map(|filters| {
+                filters
+                    .iter()
+                    .map(|f| {
+                        let kind = if f.exclude.unwrap_or(false) {
+                            steamworks::StringFilterKind::Exclude
+                        } else {
+                            steamworks::StringFilterKind::Include
+                        };
+                        Ok(steamworks::StringFilter(
+                            key(&f.key)?,
+                            f.value.as_str(),
+                            kind,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()
+            })
+            .transpose()?;
+
+        let numbers = filter
+            .numbers
+            .as_ref()
+            .map(|filters| {
+                filters
+                    .iter()
+                    .map(|f| {
+                        let comparison = match f.comparison.as_ref() {
+                            None | Some(LobbyComparison::Equal) => {
+                                steamworks::ComparisonFilter::Equal
+                            }
+                            Some(LobbyComparison::NotEqual) => {
+                                steamworks::ComparisonFilter::NotEqual
+                            }
+                            Some(LobbyComparison::GreaterThan) => {
+                                steamworks::ComparisonFilter::GreaterThan
+                            }
+                            Some(LobbyComparison::GreaterThanEqualTo) => {
+                                steamworks::ComparisonFilter::GreaterThanEqualTo
+                            }
+                            Some(LobbyComparison::LessThan) => {
+                                steamworks::ComparisonFilter::LessThan
+                            }
+                            Some(LobbyComparison::LessThanEqualTo) => {
+                                steamworks::ComparisonFilter::LessThanEqualTo
+                            }
+                        };
+                        Ok(steamworks::NumberFilter(key(&f.key)?, f.value, comparison))
+                    })
+                    .collect::<Result<Vec<_>, Error>>()
+            })
+            .transpose()?;
+
+        let near_value = filter
+            .near
+            .as_ref()
+            .map(|filters| {
+                filters
+                    .iter()
+                    .map(|f| Ok(steamworks::NearFilter(key(&f.key)?, f.value)))
+                    .collect::<Result<Vec<_>, Error>>()
+            })
+            .transpose()?;
+
+        let distance = filter.distance.as_ref().map(|distance| match distance {
+            LobbyDistance::Close => steamworks::DistanceFilter::Close,
+            LobbyDistance::Default => steamworks::DistanceFilter::Default,
+            LobbyDistance::Far => steamworks::DistanceFilter::Far,
+            LobbyDistance::Worldwide => steamworks::DistanceFilter::Worldwide,
+        });
+
+        client
+            .matchmaking()
+            .set_lobby_list_filter(steamworks::LobbyListFilter {
+                string: strings,
+                number: numbers,
+                near_value,
+                open_slots: filter.open_slots.map(|n| n.min(u8::MAX as u32) as u8),
+                distance,
+                count: filter.count.map(u64::from),
+            });
+
+        Ok(())
     }
 }

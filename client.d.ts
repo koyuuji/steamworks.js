@@ -128,9 +128,57 @@ export declare namespace matchmaking {
     Public = 2,
     Invisible = 3
   }
+  export const enum LobbyComparison {
+    Equal = 0,
+    NotEqual = 1,
+    GreaterThan = 2,
+    GreaterThanEqualTo = 3,
+    LessThan = 4,
+    LessThanEqualTo = 5
+  }
+  export const enum LobbyDistance {
+    Close = 0,
+    /** The searcher's own region and nearby ones. Steam's default. */
+    Default = 1,
+    /** About half-way around the globe. */
+    Far = 2,
+    Worldwide = 3
+  }
+  /** Lobby data `key` must equal `value`, or with `exclude` must not. */
+  export interface LobbyStringFilter {
+    key: string
+    value: string
+    exclude?: boolean
+  }
+  /** Lobby data `key`, read as a number, compared with `value`. `Equal` when no comparison is given. */
+  export interface LobbyNumberFilter {
+    key: string
+    value: number
+    comparison?: LobbyComparison
+  }
+  /** Sorts results by how close lobby data `key` is to `value`. Excludes nothing. */
+  export interface LobbyNearFilter {
+    key: string
+    value: number
+  }
+  /** What `getLobbies` asks Steam for. Every field is optional. */
+  export interface LobbyListFilter {
+    strings?: Array<LobbyStringFilter>
+    numbers?: Array<LobbyNumberFilter>
+    near?: Array<LobbyNearFilter>
+    /** Only lobbies with at least this many free places. */
+    openSlots?: number
+    distance?: LobbyDistance
+    /** At most this many lobbies. */
+    count?: number
+  }
   export function createLobby(lobbyType: LobbyType, maxMembers: number): Promise<Lobby>
   export function joinLobby(lobbyId: bigint): Promise<Lobby>
-  export function getLobbies(): Promise<Array<Lobby>>
+  /**
+   * Search for lobbies, filtered or not. Steam runs one search at a time and a new one cancels the
+   * last. Without a `distance` filter it returns only the searcher's region and nearby ones.
+   */
+  export function getLobbies(filter?: LobbyListFilter | undefined | null): Promise<Array<Lobby>>
   export class Lobby {
     id: bigint
     join(): Promise<Lobby>
@@ -152,6 +200,64 @@ export declare namespace matchmaking {
      */
     mergeFullData(data: Record<string, string>): boolean
   }
+}
+export declare namespace messages {
+  /** Bits for `sendToUser`'s `flags`, combined with `|`. An unreliable message is at most 1200 bytes. */
+  export const enum SendFlags {
+    Unreliable = 0,
+    NoNagle = 1,
+    NoDelay = 4,
+    Reliable = 8,
+    /** Reopen a session the peer has closed rather than fail the send. */
+    AutoRestartBrokenSession = 32
+  }
+  export interface ReceivedMessage {
+    data: Buffer
+    steamId: PlayerSteamId
+    channel: number
+  }
+  export interface SessionFailure {
+    /** The peer, when Steam named one. */
+    steamId64?: bigint
+    /** An `ESteamNetConnectionEnd` code, when Steam gave one this build knows. */
+    endReason?: number
+  }
+  /**
+   * Each field is Steam's availability name: `Current` is ready, and `Waiting` or `Attempting` is
+   * on its way; anything else is a failure.
+   */
+  export interface RelayStatus {
+    availability: string
+    networkConfig: string
+    anyRelay: string
+    pingMeasurementInProgress: boolean
+    debug: string
+  }
+  /** Send `data` to a Steam user. `flags` defaults to `Unreliable`, `channel` to 0. */
+  export function sendToUser(steamId64: bigint, data: Buffer, flags?: number | undefined | null, channel?: number | undefined | null): void
+  /**
+   * Up to `max` messages waiting on `channel`, oldest first. One from anything but a Steam user is
+   * dropped.
+   */
+  export function receive(channel: number, max: number): Array<ReceivedMessage>
+  /**
+   * Replace the set of users whose session requests are accepted; anyone else's is refused. Only a
+   * first message from someone not yet sent to needs this, since sending accepts implicitly.
+   */
+  export function acceptSessionsFrom(steamIds64: Array<bigint>): void
+  /** Called with each session Steam gives up on. Replaces any handler set before. */
+  export function onSessionFailed(handler: (failure: SessionFailure) => void): void
+  /**
+   * Never connect directly: every session goes through Valve's relay, so no peer learns another's
+   * IP address. Call before anything is sent; it applies to sessions opened after it.
+   */
+  export function setRelayOnly(): boolean
+  /**
+   * Start reaching the relay network now, rather than on the first message, so the first session
+   * opens sooner. Also retries after a failure.
+   */
+  export function initRelayNetworkAccess(): void
+  export function relayStatus(): RelayStatus
 }
 export declare namespace networking {
   export interface P2PPacket {
@@ -336,6 +442,7 @@ export declare namespace workshop {
    * @returns an array of subscribed workshop item ids
    */
   export function getSubscribedItems(): Array<bigint>
+  export function deleteItem(itemId: bigint): Promise<void>
   export const enum UGCQueryType {
     RankedByVote = 0,
     RankedByPublicationDate = 1,

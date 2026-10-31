@@ -1,6 +1,6 @@
 {
     "name": "steamworks.js",
-    "version": "0.4.0-koyuuji.0",
+    "version": "0.4.0-koyuuji.1",
     "main": "index.js",
     "types": "index.d.ts",
     "napi": {
@@ -23,7 +23,6 @@
     "license": "MIT",
     "devDependencies": {
         "@napi-rs/cli": "2.18.4",
-        "electron": "24.2.0",
         "rimraf": "6.0.1",
         "typescript": "5.5.3"
     },

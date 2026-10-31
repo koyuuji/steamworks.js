@@ -6,6 +6,7 @@ pub mod cloud;
 pub mod input;
 pub mod localplayer;
 pub mod matchmaking;
+pub mod messages;
 pub mod networking;
 pub mod overlay;
 pub mod stats;
